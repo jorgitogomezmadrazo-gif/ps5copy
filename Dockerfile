@@ -1,14 +1,38 @@
-FROM node:22-bookworm
-WORKDIR /app
-COPY package.json ./
-# every step below is allowed to fail without breaking the deploy: the hub itself always starts,
-# only the Scramjet proxy part is skipped if a package can't be installed
-RUN npm install --omit=dev --no-audit --no-fund || npm install --omit=dev --legacy-peer-deps --no-audit --no-fund || echo "WARNING: npm install failed - proxy disabled"
-COPY scripts ./scripts
-RUN node scripts/fetch-scramjet.mjs || echo "WARNING: scramjet files not found - proxy disabled"
-COPY server.js ./
-COPY public ./public
-RUN for d in scramjet controller; do if [ -d "$d" ]; then cp -r "$d" public/; fi; done; ls public
+# Stage 1: Build the Application
+# We use node:22 as the base for building and installing dependencies.
+FROM node:22 AS build
+
+# Set the working directory inside the container
+WORKDIR /usr/src/app
+
+# Copy package.json and package-lock.json first to leverage Docker caching.
+# If these files don't change, subsequent builds can skip 'npm install'.
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy the rest of the application source code
+COPY . .
+
+# Stage 2: Create the Final Production Image
+# We use node:22 as the runtime image with all the necessary tools.
+FROM node:22
+
+# Set the working directory
+WORKDIR /usr/src/app
+
+# Copy the node_modules and built application files from the 'build' stage
+COPY --from=build /usr/src/app/node_modules ./node_modules
+COPY --from=build /usr/src/app/package*.json ./
+COPY --from=build /usr/src/app .
+
+# Expose the port your app runs on
 ENV PORT=8080
-EXPOSE 8080
-CMD ["node","server.js"]
+EXPOSE $PORT
+
+# Run the application using the non-root user (recommended for security)
+USER node
+
+# Define the command to start your application
+CMD [ "node", "index.js" ]
